@@ -226,8 +226,21 @@ ncclUniqueId get_nccl_id_via_tcp_windows(MultiGpuConfig* result, const char* ser
     return nccl_id;
 }
 #else
+int detect_ip_version(const char *ip_address) {
+    struct in_addr ipv4_addr;
+    struct in6_addr ipv6_addr;
+    if (inet_pton(AF_INET, ip_address, &ipv4_addr) == 1) {
+        return 4;
+    }
+    if (inet_pton(AF_INET6, ip_address, &ipv6_addr) == 1) {
+        return 6;
+    }
+    return -1;
+}
+
 ncclUniqueId get_nccl_id_via_tcp(MultiGpuConfig* result, const char* server_ip) {
     ncclUniqueId nccl_id;
+    int ip_version = detect_ip_version(server_ip);
 
     int SERVER_PORT = 12345;  // hardcoded an arbitrary port number between 1024 and 49151 (registered ports)
     if (result->process_rank == 0) {
@@ -237,96 +250,205 @@ ncclUniqueId get_nccl_id_via_tcp(MultiGpuConfig* result, const char* server_ip) 
         int client_sockets[MAX_CLIENTS];
         int num_clients = 0;
         int server_socket, new_socket;
-        struct sockaddr_in address;
-        int addrlen = sizeof(address);
-        int opt = 1;
 
-        // Step 1) create a server TCP socket
-        if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-            printf("Socket failed");
-            exit(EXIT_FAILURE);
-        }
+        if (ip_version == 4) {
+            printf("Detected IPv4\n");
+            struct sockaddr_in address;
+            int addrlen = sizeof(address);
+            int opt = 1;
 
-        // Step 2) set socket options
-        // SOL_SOCKET - means that option is configured at socket level
-        // SO_REUSEADDR - allows to bind to an address which is in a TIME_WAIT state (already used by another socket) - useful when restarting the server
-        // SO_REUSEPORT - allows to bind to the same port multiple times
-        if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
-            printf("Setsockopt failed");
-            exit(EXIT_FAILURE);
-        }
-
-        // Step 3) set the server address and port
-        address.sin_family = AF_INET;  // IPv4
-        address.sin_addr.s_addr = inet_addr(server_ip); // alternatively use INADDR_ANY to bind to all interfaces, currently we only allow ethernet
-        address.sin_port = htons(SERVER_PORT);
-
-        // Step 4) bind the socket to the address and port
-        if (bind(server_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
-            printf("Bind failed");
-            exit(EXIT_FAILURE);
-        }
-
-        // Step 5) MAX_CLIENTS specifies the maximum number of clients that can be queued for this server
-        if (listen(server_socket, MAX_CLIENTS) < 0) {
-            printf("Listen failed");
-            exit(EXIT_FAILURE);
-        }
-
-        // Step 6) accept connections from clients
-        printf("Waiting for clients to connect...\n");
-        while (num_clients < MAX_CLIENTS) {
-            if ((new_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
-                printf("Accept failed");
+            // Step 1) create a server TCP socket
+            if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+                printf("Socket failed");
                 exit(EXIT_FAILURE);
             }
-            client_sockets[num_clients++] = new_socket;
-            printf("Client %d connected\n", num_clients);
+
+            // Step 2) set socket options
+            // SOL_SOCKET - means that option is configured at socket level
+            // SO_REUSEADDR - allows to bind to an address which is in a TIME_WAIT state (already used by another socket) - useful when restarting the server
+            // SO_REUSEPORT - allows to bind to the same port multiple times
+            if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
+                printf("Setsockopt failed");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 3) set the server address and port
+            address.sin_family = AF_INET;  // IPv4
+            address.sin_addr.s_addr = inet_addr(server_ip); // alternatively use INADDR_ANY to bind to all interfaces, currently we only allow ethernet
+            address.sin_port = htons(SERVER_PORT);
+
+            // Step 4) bind the socket to the address and port
+            if (bind(server_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
+                printf("Bind failed");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 5) MAX_CLIENTS specifies the maximum number of clients that can be queued for this server
+            if (listen(server_socket, MAX_CLIENTS) < 0) {
+                printf("Listen failed");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 6) accept connections from clients
+            printf("Waiting for clients to connect...\n");
+            while (num_clients < MAX_CLIENTS) {
+                if ((new_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+                    printf("Accept failed");
+                    exit(EXIT_FAILURE);
+                }
+                client_sockets[num_clients++] = new_socket;
+                printf("Client %d connected\n", num_clients);
+            }
+
+            // Step 7) send the NCCL ID to all clients
+            send_nccl_id_to_clients(&nccl_id, client_sockets, num_clients);
+            printf("NCCL ID sent to all clients\n");
+
+            scloseCheck(server_socket);
+        } else if (ip_version == 6) {
+            printf("Detected IPv6\n");
+
+            struct sockaddr_in6 address;
+            int addrlen = sizeof(address);
+            int opt = 1;
+
+            // Step 1) create a server TCP socket
+            if ((server_socket = socket(AF_INET6, SOCK_STREAM, 0)) < 0) {
+                printf("Socket failed");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 2) set socket options
+            // SOL_SOCKET - means that option is configured at socket level
+            // SO_REUSEADDR - allows to bind to an address which is in a TIME_WAIT state (already used by another socket) - useful when restarting the server
+            // SO_REUSEPORT - allows to bind to the same port multiple times
+            if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
+                printf("Setsockopt failed");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 3) set the server address and port
+            address.sin6_family = AF_INET6;
+            address.sin6_port = htons(SERVER_PORT);
+            // alternatively use INADDR_ANY to bind to all interfaces, currently we only allow ethernet
+            if (inet_pton(AF_INET6, server_ip, &address.sin6_addr) <= 0) {
+                printf("Invalid address or address not supported");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 4) bind the socket to the address and port
+            if (bind(server_socket, (struct sockaddr *)&address, sizeof(address)) < 0) {
+                printf("Bind failed");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 5) MAX_CLIENTS specifies the maximum number of clients that can be queued for this server
+            if (listen(server_socket, MAX_CLIENTS) < 0) {
+                printf("Listen failed");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 6) accept connections from clients
+            printf("Waiting for clients to connect...\n");
+            while (num_clients < MAX_CLIENTS) {
+                if ((new_socket = accept(server_socket, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
+                    printf("Accept failed");
+                    exit(EXIT_FAILURE);
+                }
+                client_sockets[num_clients++] = new_socket;
+                printf("Client %d connected\n", num_clients);
+            }
+
+            // Step 7) send the NCCL ID to all clients
+            send_nccl_id_to_clients(&nccl_id, client_sockets, num_clients);
+            printf("NCCL ID sent to all clients\n");
+
+            scloseCheck(server_socket);
+            // TODO: implement IPv6
+        } else {
+            printf("Unsupported IP version\n");
+            exit(EXIT_FAILURE);
         }
-
-        // Step 7) send the NCCL ID to all clients
-        send_nccl_id_to_clients(&nccl_id, client_sockets, num_clients);
-        printf("NCCL ID sent to all clients\n");
-
-        scloseCheck(server_socket);
     } else {
-        int num_connection_attempts = 5;
-        int time_to_sleep = 2;
-        int client_socket;
-        struct sockaddr_in serv_addr;
-
-        // Step 1) create a client TCP socket
-        if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-            printf("Socket creation error");
-            exit(EXIT_FAILURE);
-        }
-
-        // Step 2) set the server address and port
-        serv_addr.sin_family = AF_INET;
-        serv_addr.sin_port = htons(SERVER_PORT);
-        if (inet_pton(AF_INET, server_ip, &serv_addr.sin_addr) <= 0) {
-            printf("Invalid address or address not supported");
-            exit(EXIT_FAILURE);
-        }
-
-        // Step 3) Try to connect to the server - retry up to `num_connection_attempts` times if the connection fails
-        while (connect(client_socket, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-            printf("%d Connection failed, retrying in %d seconds\n", result->process_rank, time_to_sleep);
-            if (--num_connection_attempts == 0) {
-                printf("Failed to connect to the server\n");
+        if (ip_version == 4) {
+            printf("Detected IPv4\n");
+            int client_socket;
+            struct sockaddr_in serv_addr;
+            int num_connection_attempts = 5;
+            int time_to_sleep = 2;
+            // Step 1) create a client TCP socket
+            if ((client_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+                printf("Socket creation error");
                 exit(EXIT_FAILURE);
             }
-            sleep(time_to_sleep);
-        }
 
-        // Step 4) receive the NCCL ID from the server
-        if (recv(client_socket, &nccl_id, sizeof(nccl_id), 0) <= 0) {
-            printf("Failed to receive nccl_id");
+            // Step 2) set the server address and port
+            serv_addr.sin_family = AF_INET;
+            serv_addr.sin_port = htons(SERVER_PORT);
+            if (inet_pton(AF_INET, server_ip, &serv_addr.sin_addr) <= 0) {
+                printf("Invalid address or address not supported");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 3) Try to connect to the server - retry up to `num_connection_attempts` times if the connection fails
+            while (connect(client_socket, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+                printf("%d Connection failed, retrying in %d seconds\n", result->process_rank, time_to_sleep);
+                if (--num_connection_attempts == 0) {
+                    printf("Failed to connect to the server\n");
+                    exit(EXIT_FAILURE);
+                }
+                sleep(time_to_sleep);
+            }
+
+            // Step 4) receive the NCCL ID from the server
+            if (recv(client_socket, &nccl_id, sizeof(nccl_id), 0) <= 0) {
+                printf("Failed to receive nccl_id");
+                exit(EXIT_FAILURE);
+            }
+            printf("Received NCCL ID\n");
+            scloseCheck(client_socket);
+        } else if (ip_version == 6) {
+            printf("Detected IPv6\n");
+            int num_connection_attempts = 10;
+            int time_to_sleep = 2;
+            int client_socket;
+            struct sockaddr_in6 server_addr;
+
+            // Step 1) create a client TCP socket
+            if ((client_socket = socket(AF_INET6, SOCK_STREAM, 0)) < 0) {
+                printf("Socket creation error");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 2) set the server address and port
+            server_addr.sin6_family = AF_INET6;
+            server_addr.sin6_port = htons(SERVER_PORT);
+            if (inet_pton(AF_INET6, server_ip, &server_addr.sin6_addr) <= 0) {
+                printf("Invalid address or address not supported");
+                exit(EXIT_FAILURE);
+            }
+
+            // Step 3) Try to connect to the server - retry up to `num_connection_attempts` times if the connection fails
+            while (connect(client_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+                printf("%d Connection failed, retrying in %d seconds\n", result->process_rank, time_to_sleep);
+                if (--num_connection_attempts == 0) {
+                    printf("Failed to connect to the server\n");
+                    exit(EXIT_FAILURE);
+                }
+                sleep(time_to_sleep);
+            }
+
+            // Step 4) receive the NCCL ID from the server
+            if (recv(client_socket, &nccl_id, sizeof(nccl_id), 0) <= 0) {
+                printf("Failed to receive nccl_id");
+                exit(EXIT_FAILURE);
+            }
+            printf("Received NCCL ID\n");
+            scloseCheck(client_socket);
+        } else {
+            printf("Unsupported IP version\n");
             exit(EXIT_FAILURE);
         }
-
-        printf("Received NCCL ID\n");
-        scloseCheck(client_socket);
     }
 
     return nccl_id;
