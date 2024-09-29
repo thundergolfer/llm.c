@@ -1300,6 +1300,7 @@ void load_state(int* step, GPT2* model, DataLoader* loader, const char* filename
         // ensure the number of samples matches
         size_t shard_num_samples;
         freadCheck(&shard_num_samples, sizeof(size_t), 1, state_file);
+        printf("shard_num_samples: %zu, loader->shard_num_samples: %zu\n", shard_num_samples, loader->shard_num_samples);
         assert(shard_num_samples == loader->shard_num_samples);
         // read the intra-shard indices
         loader->intra_shard_indices = (int*)mallocCheck(loader->shard_num_samples * sizeof(int));
