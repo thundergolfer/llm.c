@@ -26,12 +26,15 @@
 extern inline FILE *fopen_check(const char *path, const char *mode, const char *file, int line) {
     FILE *fp = fopen(path, mode);
     if (fp == NULL) {
+        int errnum = errno;
         fprintf(stderr, "Error: Failed to open file '%s' at %s:%d\n", path, file, line);
         fprintf(stderr, "Error details:\n");
         fprintf(stderr, "  File: %s\n", file);
         fprintf(stderr, "  Line: %d\n", line);
         fprintf(stderr, "  Path: %s\n", path);
         fprintf(stderr, "  Mode: %s\n", mode);
+        fprintf(stderr, "  Error code: %d\n", errnum);
+        fprintf(stderr, "  Error message: %s\n", strerror(errnum));
         fprintf(stderr, "---> HINT 1: dataset files/code have moved to dev/data recently (May 20, 2024). You may have to mv them from the legacy data/ dir to dev/data/(dataset), or re-run the data preprocessing script. Refer back to the main README\n");
         fprintf(stderr, "---> HINT 2: possibly try to re-run `python train_gpt2.py`\n");
         exit(EXIT_FAILURE);
